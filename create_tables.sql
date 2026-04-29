@@ -93,5 +93,4 @@ CREATE TABLE loans (
     due_date DATE NOT NULL,
     return_date DATE,
     purpose TEXT
->>>>>>> 48fc7733325149068a85980c584f5015cfef5956
 );
