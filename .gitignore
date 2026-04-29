@@ -1,0 +1,27 @@
+# Файлы базы данных
+*.db
+*.sqlite
+*.sqlite3
+
+# Логи
+*.log
+*.pid
+*.tmp
+
+# Дампы базы данных
+*.dump
+*.backup
+
+# Файлы с паролями
+.env
+.pgpass
+config.py
+
+# Папки IDE (PyCharm)
+.vscode/
+.idea/
+__pycache__/
+
+# Временные файлы Windows
+Thumbs.db
+desktop.ini
