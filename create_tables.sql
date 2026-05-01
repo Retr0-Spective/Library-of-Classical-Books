@@ -1,27 +1,22 @@
--- Мировая классическая библиотека
-
+-- СОЗДАНИЕ ТАБЛИЦ
 -- 1. СТРАНЫ
 CREATE TABLE countries (
     id SERIAL PRIMARY KEY,
     name VARCHAR(50) NOT NULL UNIQUE,
-    continent VARCHAR(50),
-    language_official VARCHAR(50),
-    code VARCHAR(3)
+    continent VARCHAR(50)
 );
 
 -- 2. ЛИТЕРАТУРНЫЕ НАПРАВЛЕНИЯ
 CREATE TABLE literary_movements (
     id SERIAL PRIMARY KEY,
     name VARCHAR(50) NOT NULL UNIQUE,
-    century_origin VARCHAR(20),
-    description TEXT
+    century_origin VARCHAR(20)
 );
 
 -- 3. ЖАНРЫ
 CREATE TABLE genres (
     id SERIAL PRIMARY KEY,
-    name VARCHAR(50) NOT NULL UNIQUE,
-    category VARCHAR(30)
+    name VARCHAR(50) NOT NULL UNIQUE
 );
 
 -- 4. АВТОРЫ
@@ -33,8 +28,7 @@ CREATE TABLE authors (
     death_year INT,
     country_id INT REFERENCES countries(id),
     movement_id INT REFERENCES literary_movements(id),
-    notable_works TEXT,
-    biography TEXT
+    notable_works TEXT
 );
 
 -- 5. КНИГИ
@@ -47,17 +41,19 @@ CREATE TABLE books (
     movement_id INT REFERENCES literary_movements(id),
     century VARCHAR(20) NOT NULL,
     year_written INT,
-    year_published_first INT,
     language_original VARCHAR(30),
     country_origin_id INT REFERENCES countries(id),
     is_epic BOOLEAN DEFAULT FALSE,
     word_count INT,
-    plot_summary TEXT,
     total_copies INT DEFAULT 2,
-    available_copies INT DEFAULT 2
+    available_copies INT DEFAULT 2,
+    
+    CHECK (year_written > -3000),
+    CHECK (total_copies >= 0),
+    CHECK (available_copies BETWEEN 0 AND total_copies)
 );
 
--- 6. ИЗДАНИЯ (ISBN теперь UNIQUE, но без дубликатов)
+-- 6. ИЗДАНИЯ
 CREATE TABLE editions (
     id SERIAL PRIMARY KEY,
     book_id INT NOT NULL REFERENCES books(id),
@@ -66,7 +62,6 @@ CREATE TABLE editions (
     publication_year INT,
     isbn VARCHAR(20) UNIQUE,
     page_count INT,
-    cover_type VARCHAR(20),
     price DECIMAL(10, 2)
 );
 
@@ -92,5 +87,69 @@ CREATE TABLE loans (
     loan_date DATE NOT NULL DEFAULT CURRENT_DATE,
     due_date DATE NOT NULL,
     return_date DATE,
-    purpose TEXT
+    purpose TEXT,
+    
+    CHECK (due_date >= loan_date),
+    CHECK (return_date IS NULL OR return_date >= loan_date)
 );
+
+
+-- ИНДЕКСЫ
+CREATE INDEX idx_books_author ON books(author_id);
+CREATE INDEX idx_books_title ON books(title_translated);
+CREATE INDEX idx_loans_dates ON loans(loan_date, due_date);
+
+
+-- ПРОЕКЦИИ (VIEW)
+-- 1. По одной таблице (доступные книги)
+CREATE VIEW available_books AS
+SELECT id, title_translated, author_id, available_copies
+FROM books
+WHERE available_copies > 0;
+
+-- 2. По нескольким таблицам (информация о книгах)
+CREATE VIEW books_info AS
+SELECT 
+    b.title_translated AS book_title,
+    a.last_name AS author,
+    c.name AS country,
+    b.century,
+    b.available_copies
+FROM books b
+JOIN authors a ON b.author_id = a.id
+JOIN countries c ON b.country_origin_id = c.id;
+
+-- 3. С GROUP BY и HAVING (статистика по странам)
+CREATE VIEW country_statistics AS
+SELECT 
+    c.name AS country,
+    COUNT(b.id) AS total_books,
+    SUM(b.total_copies) AS total_copies
+FROM countries c
+LEFT JOIN books b ON c.id = b.country_origin_id
+GROUP BY c.name
+HAVING COUNT(b.id) >= 2;
+
+
+-- ТРИГГЕР
+CREATE OR REPLACE FUNCTION update_book_copies()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        UPDATE books 
+        SET available_copies = available_copies - 1 
+        WHERE id = NEW.book_id;
+    ELSIF TG_OP = 'UPDATE' AND NEW.return_date IS NOT NULL 
+          AND OLD.return_date IS NULL THEN
+        UPDATE books 
+        SET available_copies = available_copies + 1 
+        WHERE id = NEW.book_id;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER on_loan_change
+AFTER INSERT OR UPDATE ON loans
+FOR EACH ROW
+EXECUTE FUNCTION update_book_copies();
