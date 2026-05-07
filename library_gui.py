@@ -1,7 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
 import psycopg2
-
 DB_CONFIG = {
     'host': 'localhost',
     'port': 5432,
@@ -10,19 +9,20 @@ DB_CONFIG = {
     'password': 'OAhd112'
 }
 
-
 class LibraryApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Мировая классическая библиотека")
-        self.root.geometry("900x600")
+        self.root.geometry("950x650")
         self.root.resizable(True, True)
 
-        # Подключение к БД
-        self.conn = None
-        self.connect_to_db()
+        self.current_table = None
+        self.current_data = []
+        self.current_columns = []
+        self.sort_column = None
+        self.sort_reverse = False
 
-        # Создание интерфейса
+        self.connect_to_db()
         self.create_menu()
         self.create_main_frame()
 
@@ -39,7 +39,6 @@ class LibraryApp:
         menubar = tk.Menu(self.root)
         self.root.config(menu=menubar)
 
-        # Меню "Книги"
         books_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Книги", menu=books_menu)
         books_menu.add_command(label="Показать все книги", command=self.show_books)
@@ -49,7 +48,6 @@ class LibraryApp:
         books_menu.add_separator()
         books_menu.add_command(label="Поиск книг", command=self.search_books)
 
-        # Меню "Авторы"
         authors_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Авторы", menu=authors_menu)
         authors_menu.add_command(label="Показать всех авторов", command=self.show_authors)
@@ -57,7 +55,6 @@ class LibraryApp:
         authors_menu.add_command(label="Редактировать автора", command=self.edit_author)
         authors_menu.add_command(label="Удалить автора", command=self.delete_author)
 
-        # Меню "Читатели"
         readers_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Читатели", menu=readers_menu)
         readers_menu.add_command(label="Показать всех читателей", command=self.show_readers)
@@ -65,7 +62,6 @@ class LibraryApp:
         readers_menu.add_command(label="Редактировать читателя", command=self.edit_reader)
         readers_menu.add_command(label="Удалить читателя", command=self.delete_reader)
 
-        # Меню "Выдача"
         loans_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Выдача книг", menu=loans_menu)
         loans_menu.add_command(label="Все выдачи", command=self.show_loans)
@@ -73,7 +69,6 @@ class LibraryApp:
         loans_menu.add_command(label="Вернуть книгу", command=self.return_book)
         loans_menu.add_command(label="Активные выдачи", command=self.show_active_loans)
 
-        # Меню "Отчёты"
         reports_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Отчёты", menu=reports_menu)
         reports_menu.add_command(label="Книги на руках", command=self.report_books_on_hands)
@@ -81,7 +76,6 @@ class LibraryApp:
         reports_menu.add_command(label="Книги по странам", command=self.report_books_by_country)
         reports_menu.add_command(label="Популярность по жанрам", command=self.report_genre_popularity)
 
-        # Меню "Помощь"
         help_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Помощь", menu=help_menu)
         help_menu.add_command(label="О программе", command=self.show_about)
@@ -90,21 +84,26 @@ class LibraryApp:
         self.main_frame = ttk.Frame(self.root, padding="10")
         self.main_frame.pack(fill=tk.BOTH, expand=True)
 
-        # Заголовок
         title_label = ttk.Label(self.main_frame, text="МИРОВАЯ КЛАССИЧЕСКАЯ БИБЛИОТЕКА",
                                 font=("Arial", 16, "bold"))
         title_label.pack(pady=10)
 
-        # Таблица для отображения данных
-        self.tree = ttk.Treeview(self.main_frame, show="headings")
+        table_frame = ttk.Frame(self.main_frame)
+        table_frame.pack(fill=tk.BOTH, expand=True)
+
+        self.tree = ttk.Treeview(table_frame, show="headings")
+
+        v_scrollbar = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        h_scrollbar = ttk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        h_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.tree.configure(yscrollcommand=v_scrollbar.set, xscrollcommand=h_scrollbar.set)
         self.tree.pack(fill=tk.BOTH, expand=True)
 
-        # Скроллбар для таблицы
-        scrollbar = ttk.Scrollbar(self.main_frame, orient=tk.VERTICAL, command=self.tree.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.tree.configure(yscrollcommand=scrollbar.set)
+        self.tree.bind("<ButtonRelease-1>", self.on_column_click)
 
-        # Кнопки управления
         button_frame = ttk.Frame(self.main_frame)
         button_frame.pack(fill=tk.X, pady=10)
 
@@ -112,85 +111,161 @@ class LibraryApp:
         ttk.Button(button_frame, text="Выдать книгу", command=self.loan_book).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Вернуть книгу", command=self.return_book).pack(side=tk.LEFT, padx=5)
 
-        # Статусная строка
         self.status_var = tk.StringVar()
         self.status_var.set("Готов к работе")
         status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # Загружаем начальные данные
         self.show_books()
+
+    def on_column_click(self, event):
+        """Обработчик клика по заголовку колонки для сортировки"""
+        col = self.tree.identify_column(event.x)
+        if col:
+            col_index = int(col.replace("#", "")) - 1
+            if col_index < len(self.current_columns):
+                col_name = self.current_columns[col_index]
+
+                if self.sort_column == col_name:
+                    self.sort_reverse = not self.sort_reverse
+                else:
+                    self.sort_column = col_name
+                    self.sort_reverse = False
+
+                self.sort_and_display()
+
+    def sort_and_display(self):
+        """Сортировка данных по выбранной колонке и отображение"""
+        if not self.sort_column or not self.current_data:
+            return
+
+        try:
+            col_index = self.current_columns.index(self.sort_column)
+        except ValueError:
+            return
+
+        try:
+            self.current_data.sort(
+                key=lambda x: str(x[col_index]).lower() if x[col_index] is not None else "",
+                reverse=self.sort_reverse
+            )
+        except:
+            self.current_data.sort(
+                key=lambda x: str(x[col_index]) if x[col_index] is not None else "",
+                reverse=self.sort_reverse
+            )
+
+        self.refresh_table_display()
+
+        for col in self.current_columns:
+            self.tree.heading(col, text=col)
+        arrow = " ▼" if self.sort_reverse else " ▲"
+        self.tree.heading(self.sort_column, text=self.sort_column + arrow)
+
+    def refresh_table_display(self):
+        """Обновление таблицы из current_data"""
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        for row in self.current_data:
+            display_row = ["" if v is None else v for v in row]
+            self.tree.insert("", tk.END, values=display_row)
+
+        self.auto_fit_columns()
+
+    def auto_fit_columns(self):
+        """Автоматическая подгонка ширины колонок под содержимое"""
+        for col in self.current_columns:
+            max_width = len(col) * 10
+            for row in self.current_data:
+                col_index = self.current_columns.index(col)
+                value = str(row[col_index]) if row[col_index] is not None else ""
+                width = len(value) * 8
+                if width > max_width:
+                    max_width = min(width, 400)
+            self.tree.column(col, width=max_width + 10, minwidth=60)
+
+    def set_table_data(self, columns, data):
+        """Установка данных в таблицу"""
+        self.current_columns = columns
+        self.current_data = data
+        self.sort_column = None
+        self.sort_reverse = False
+
+        self.tree["columns"] = columns
+        for col in columns:
+            self.tree.heading(col, text=col)
+            self.tree.column(col, width=120, minwidth=60)
+
+        self.refresh_table_display()
+        self.status_var.set(f"Загружено записей: {len(data)}")
 
     def clear_table(self):
         for item in self.tree.get_children():
             self.tree.delete(item)
 
     def refresh_view(self):
-        self.show_books()
+        """Обновление текущего вида"""
+        if self.current_table == "books":
+            self.show_books()
+        elif self.current_table == "authors":
+            self.show_authors()
+        elif self.current_table == "readers":
+            self.show_readers()
+        elif self.current_table == "loans":
+            self.show_loans()
 
     def show_books(self):
-        self.clear_table()
+        self.current_table = "books"
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT b.id, b.title_translated, a.last_name, b.century, b.available_copies
+            SELECT b.id, b.title_translated, a.last_name, b.century, 
+                   CASE WHEN b.available_copies > 0 THEN 'В наличии' ELSE 'Нет' END as status,
+                   b.available_copies
             FROM books b JOIN authors a ON b.author_id = a.id
             ORDER BY b.title_translated
         """)
         rows = cursor.fetchall()
         cursor.close()
 
-        columns = ["ID", "Название", "Автор", "Век", "В наличии"]
-        self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=150)
-
-        for row in rows:
-            self.tree.insert("", tk.END, values=row)
-
-        self.status_var.set(f"Загружено книг: {len(rows)}")
+        columns = ["ID", "Название", "Автор", "Век", "Статус", "Доступно"]
+        self.set_table_data(columns, rows)
 
     def show_authors(self):
-        self.clear_table()
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT id, first_name, last_name, birth_year FROM authors ORDER BY last_name")
-        rows = cursor.fetchall()
-        cursor.close()
-
-        columns = ["ID", "Имя", "Фамилия", "Год рождения"]
-        self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=150)
-
-        for row in rows:
-            self.tree.insert("", tk.END, values=row)
-
-        self.status_var.set(f"Загружено авторов: {len(rows)}")
-
-    def show_readers(self):
-        self.clear_table()
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT id, first_name, last_name, email, phone FROM readers ORDER BY last_name")
-        rows = cursor.fetchall()
-        cursor.close()
-
-        columns = ["ID", "Имя", "Фамилия", "Email", "Телефон"]
-        self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=120)
-
-        for row in rows:
-            self.tree.insert("", tk.END, values=row)
-
-        self.status_var.set(f"Загружено читателей: {len(rows)}")
-
-    def show_loans(self):
-        self.clear_table()
+        self.current_table = "authors"
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT l.id, b.title_translated, r.first_name, r.last_name, l.loan_date, l.due_date, l.return_date
+            SELECT a.id, a.first_name, a.last_name, a.birth_year, c.name
+            FROM authors a
+            LEFT JOIN countries c ON a.country_id = c.id
+            ORDER BY a.last_name
+        """)
+        rows = cursor.fetchall()
+        cursor.close()
+
+        columns = ["ID", "Имя", "Фамилия", "Год рождения", "Страна"]
+        self.set_table_data(columns, rows)
+
+    def show_readers(self):
+        self.current_table = "readers"
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT id, first_name, last_name, email, phone, registration_date
+            FROM readers ORDER BY last_name
+        """)
+        rows = cursor.fetchall()
+        cursor.close()
+
+        columns = ["ID", "Имя", "Фамилия", "Email", "Телефон", "Дата регистрации"]
+        self.set_table_data(columns, rows)
+
+    def show_loans(self):
+        self.current_table = "loans"
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT l.id, b.title_translated, r.first_name, r.last_name, 
+                   l.loan_date, l.due_date, 
+                   CASE WHEN l.return_date IS NULL THEN 'Активна' ELSE 'Возвращена' END as status
             FROM loans l
             JOIN books b ON l.book_id = b.id
             JOIN readers r ON l.reader_id = r.id
@@ -199,19 +274,11 @@ class LibraryApp:
         rows = cursor.fetchall()
         cursor.close()
 
-        columns = ["ID", "Книга", "Читатель", "Фамилия", "Дата выдачи", "Срок", "Дата возврата"]
-        self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=100)
-
-        for row in rows:
-            self.tree.insert("", tk.END, values=row)
-
-        self.status_var.set(f"Загружено выдач: {len(rows)}")
+        columns = ["ID", "Книга", "Имя читателя", "Фамилия", "Дата выдачи", "Срок", "Статус"]
+        self.set_table_data(columns, rows)
 
     def show_active_loans(self):
-        self.clear_table()
+        self.current_table = "active_loans"
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT b.title_translated, r.first_name, r.last_name, l.due_date
@@ -224,20 +291,12 @@ class LibraryApp:
         cursor.close()
 
         columns = ["Книга", "Имя читателя", "Фамилия", "Срок возврата"]
-        self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=150)
-
-        for row in rows:
-            self.tree.insert("", tk.END, values=row)
-
-        self.status_var.set(f"Активных выдач: {len(rows)}")
+        self.set_table_data(columns, rows)
 
     def add_book(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("Добавить книгу")
-        dialog.geometry("400x300")
+        dialog.geometry("400x350")
         dialog.transient(self.root)
         dialog.grab_set()
 
@@ -245,7 +304,6 @@ class LibraryApp:
         title_entry = ttk.Entry(dialog, width=40)
         title_entry.pack(pady=5)
 
-        # Выбор автора
         ttk.Label(dialog, text="Автор:").pack(pady=5)
         author_combo = ttk.Combobox(dialog, width=37)
         cursor = self.conn.cursor()
@@ -347,6 +405,98 @@ class LibraryApp:
 
         ttk.Button(dialog, text="Сохранить", command=save).pack(pady=20)
 
+    def edit_book(self):
+        book_id = simpledialog.askstring("Редактировать книгу", "Введите ID книги:")
+        if book_id:
+            new_title = simpledialog.askstring("Редактировать книгу", "Введите новое название:")
+            if new_title:
+                cursor = self.conn.cursor()
+                try:
+                    cursor.execute("UPDATE books SET title_translated = %s WHERE id = %s", (new_title, book_id))
+                    self.conn.commit()
+                    messagebox.showinfo("Успех", "Книга обновлена!")
+                    self.show_books()
+                except Exception as e:
+                    messagebox.showerror("Ошибка", str(e))
+                cursor.close()
+
+    def edit_author(self):
+        author_id = simpledialog.askstring("Редактировать автора", "Введите ID автора:")
+        if author_id:
+            new_name = simpledialog.askstring("Редактировать автора", "Введите новое имя автора:")
+            if new_name:
+                cursor = self.conn.cursor()
+                try:
+                    parts = new_name.split()
+                    if len(parts) >= 2:
+                        cursor.execute("UPDATE authors SET first_name = %s, last_name = %s WHERE id = %s",
+                                       (parts[0], ' '.join(parts[1:]), author_id))
+                    else:
+                        cursor.execute("UPDATE authors SET last_name = %s WHERE id = %s", (new_name, author_id))
+                    self.conn.commit()
+                    messagebox.showinfo("Успех", "Автор обновлён!")
+                    self.show_authors()
+                except Exception as e:
+                    messagebox.showerror("Ошибка", str(e))
+                cursor.close()
+
+    def edit_reader(self):
+        reader_id = simpledialog.askstring("Редактировать читателя", "Введите ID читателя:")
+        if reader_id:
+            new_phone = simpledialog.askstring("Редактировать читателя", "Введите новый телефон:")
+            if new_phone:
+                cursor = self.conn.cursor()
+                try:
+                    cursor.execute("UPDATE readers SET phone = %s WHERE id = %s", (new_phone, reader_id))
+                    self.conn.commit()
+                    messagebox.showinfo("Успех", "Читатель обновлён!")
+                    self.show_readers()
+                except Exception as e:
+                    messagebox.showerror("Ошибка", str(e))
+                cursor.close()
+
+    def delete_book(self):
+        book_id = simpledialog.askstring("Удалить книгу", "Введите ID книги:")
+        if book_id and messagebox.askyesno("Подтверждение", f"Удалить книгу с ID {book_id}?"):
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute("DELETE FROM loans WHERE book_id = %s", (book_id,))
+                cursor.execute("DELETE FROM books WHERE id = %s", (book_id,))
+                self.conn.commit()
+                messagebox.showinfo("Успех", "Книга удалена!")
+                self.show_books()
+            except Exception as e:
+                messagebox.showerror("Ошибка", str(e))
+            cursor.close()
+
+    def delete_author(self):
+        author_id = simpledialog.askstring("Удалить автора", "Введите ID автора:")
+        if author_id and messagebox.askyesno("Подтверждение", f"Удалить автора с ID {author_id}?"):
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute("UPDATE books SET author_id = NULL WHERE author_id = %s", (author_id,))
+                cursor.execute("DELETE FROM authors WHERE id = %s", (author_id,))
+                self.conn.commit()
+                messagebox.showinfo("Успех", "Автор удалён!")
+                self.show_authors()
+            except Exception as e:
+                messagebox.showerror("Ошибка", str(e))
+            cursor.close()
+
+    def delete_reader(self):
+        reader_id = simpledialog.askstring("Удалить читателя", "Введите ID читателя:")
+        if reader_id and messagebox.askyesno("Подтверждение", f"Удалить читателя с ID {reader_id}?"):
+            cursor = self.conn.cursor()
+            try:
+                cursor.execute("UPDATE loans SET reader_id = NULL WHERE reader_id = %s", (reader_id,))
+                cursor.execute("DELETE FROM readers WHERE id = %s", (reader_id,))
+                self.conn.commit()
+                messagebox.showinfo("Успех", "Читатель удалён!")
+                self.show_readers()
+            except Exception as e:
+                messagebox.showerror("Ошибка", str(e))
+            cursor.close()
+
     def loan_book(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("Выдать книгу")
@@ -402,14 +552,14 @@ class LibraryApp:
     def return_book(self):
         dialog = tk.Toplevel(self.root)
         dialog.title("Вернуть книгу")
-        dialog.geometry("400x300")
+        dialog.geometry("500x300")
         dialog.transient(self.root)
         dialog.grab_set()
 
         ttk.Label(dialog, text="Выберите выдачу для возврата:").pack(pady=10)
 
-        listbox = tk.Listbox(dialog, width=50, height=10)
-        listbox.pack(pady=10)
+        listbox = tk.Listbox(dialog, width=60, height=10)
+        listbox.pack(pady=10, padx=10)
 
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -445,108 +595,13 @@ class LibraryApp:
 
         ttk.Button(dialog, text="Вернуть", command=save).pack(pady=20)
 
-    def edit_book(self):
-        book_id = simpledialog.askstring("Редактировать книгу", "Введите ID книги для редактирования:")
-        if book_id:
-            new_title = simpledialog.askstring("Редактировать книгу", "Введите новое название:")
-            if new_title:
-                cursor = self.conn.cursor()
-                try:
-                    cursor.execute("UPDATE books SET title_translated = %s WHERE id = %s", (new_title, book_id))
-                    self.conn.commit()
-                    messagebox.showinfo("Успех", "Книга обновлена!")
-                    self.show_books()
-                except Exception as e:
-                    messagebox.showerror("Ошибка", str(e))
-                cursor.close()
-
-    def edit_author(self):
-        author_id = simpledialog.askstring("Редактировать автора", "Введите ID автора:")
-        if author_id:
-            new_name = simpledialog.askstring("Редактировать автора", "Введите новое имя автора:")
-            if new_name:
-                cursor = self.conn.cursor()
-                try:
-                    parts = new_name.split()
-                    if len(parts) >= 2:
-                        cursor.execute("UPDATE authors SET first_name = %s, last_name = %s WHERE id = %s",
-                                       (parts[0], ' '.join(parts[1:]), author_id))
-                    else:
-                        cursor.execute("UPDATE authors SET last_name = %s WHERE id = %s", (new_name, author_id))
-                    self.conn.commit()
-                    messagebox.showinfo("Успех", "Автор обновлён!")
-                    self.show_authors()
-                except Exception as e:
-                    messagebox.showerror("Ошибка", str(e))
-                cursor.close()
-
-    def edit_reader(self):
-        reader_id = simpledialog.askstring("Редактировать читателя", "Введите ID читателя:")
-        if reader_id:
-            new_phone = simpledialog.askstring("Редактировать читателя", "Введите новый телефон:")
-            if new_phone:
-                cursor = self.conn.cursor()
-                try:
-                    cursor.execute("UPDATE readers SET phone = %s WHERE id = %s", (new_phone, reader_id))
-                    self.conn.commit()
-                    messagebox.showinfo("Успех", "Читатель обновлён!")
-                    self.show_readers()
-                except Exception as e:
-                    messagebox.showerror("Ошибка", str(e))
-                cursor.close()
-
-    def delete_book(self):
-        book_id = simpledialog.askstring("Удалить книгу", "Введите ID книги для удаления:")
-        if book_id:
-            if messagebox.askyesno("Подтверждение", f"Удалить книгу с ID {book_id}?"):
-                cursor = self.conn.cursor()
-                try:
-                    cursor.execute("DELETE FROM loans WHERE book_id = %s", (book_id,))
-                    cursor.execute("DELETE FROM books WHERE id = %s", (book_id,))
-                    self.conn.commit()
-                    messagebox.showinfo("Успех", "Книга удалена!")
-                    self.show_books()
-                except Exception as e:
-                    messagebox.showerror("Ошибка", str(e))
-                cursor.close()
-
-    def delete_author(self):
-        author_id = simpledialog.askstring("Удалить автора", "Введите ID автора:")
-        if author_id:
-            if messagebox.askyesno("Подтверждение", f"Удалить автора с ID {author_id}?"):
-                cursor = self.conn.cursor()
-                try:
-                    cursor.execute("UPDATE books SET author_id = NULL WHERE author_id = %s", (author_id,))
-                    cursor.execute("DELETE FROM authors WHERE id = %s", (author_id,))
-                    self.conn.commit()
-                    messagebox.showinfo("Успех", "Автор удалён!")
-                    self.show_authors()
-                except Exception as e:
-                    messagebox.showerror("Ошибка", str(e))
-                cursor.close()
-
-    def delete_reader(self):
-        reader_id = simpledialog.askstring("Удалить читателя", "Введите ID читателя:")
-        if reader_id:
-            if messagebox.askyesno("Подтверждение", f"Удалить читателя с ID {reader_id}?"):
-                cursor = self.conn.cursor()
-                try:
-                    cursor.execute("UPDATE loans SET reader_id = NULL WHERE reader_id = %s", (reader_id,))
-                    cursor.execute("DELETE FROM readers WHERE id = %s", (reader_id,))
-                    self.conn.commit()
-                    messagebox.showinfo("Успех", "Читатель удалён!")
-                    self.show_readers()
-                except Exception as e:
-                    messagebox.showerror("Ошибка", str(e))
-                cursor.close()
-
     def search_books(self):
         search = simpledialog.askstring("Поиск книг", "Введите название или автора:")
         if search:
-            self.clear_table()
             cursor = self.conn.cursor()
             cursor.execute("""
-                SELECT b.id, b.title_translated, a.last_name, b.century, b.available_copies
+                SELECT b.id, b.title_translated, a.last_name, b.century, 
+                       CASE WHEN b.available_copies > 0 THEN 'В наличии' ELSE 'Нет' END
                 FROM books b JOIN authors a ON b.author_id = a.id
                 WHERE b.title_translated ILIKE %s OR a.last_name ILIKE %s
                 ORDER BY b.title_translated
@@ -554,19 +609,11 @@ class LibraryApp:
             rows = cursor.fetchall()
             cursor.close()
 
-            columns = ["ID", "Название", "Автор", "Век", "В наличии"]
-            self.tree["columns"] = columns
-            for col in columns:
-                self.tree.heading(col, text=col)
-                self.tree.column(col, width=150)
-
-            for row in rows:
-                self.tree.insert("", tk.END, values=row)
-
+            columns = ["ID", "Название", "Автор", "Век", "Статус"]
+            self.set_table_data(columns, rows)
             self.status_var.set(f"Найдено книг: {len(rows)}")
 
     def report_books_on_hands(self):
-        self.clear_table()
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT r.first_name || ' ' || r.last_name as reader, COUNT(l.id) as books, 
@@ -581,18 +628,10 @@ class LibraryApp:
         cursor.close()
 
         columns = ["Читатель", "Книг на руках", "Просрочено"]
-        self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=200)
-
-        for row in rows:
-            self.tree.insert("", tk.END, values=row)
-
-        self.status_var.set(f"Отчёт: книги на руках у читателей")
+        self.set_table_data(columns, rows)
+        self.status_var.set("Отчёт: книги на руках у читателей")
 
     def report_author_stats(self):
-        self.clear_table()
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT a.last_name, COUNT(b.id) as books, SUM(b.total_copies) as copies, 
@@ -604,18 +643,10 @@ class LibraryApp:
         cursor.close()
 
         columns = ["Автор", "Книг", "Экземпляров", "Ср. слов"]
-        self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=150)
-
-        for row in rows:
-            self.tree.insert("", tk.END, values=row)
-
-        self.status_var.set(f"Отчёт: статистика по авторам")
+        self.set_table_data(columns, rows)
+        self.status_var.set("Отчёт: статистика по авторам")
 
     def report_books_by_country(self):
-        self.clear_table()
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT c.name, COUNT(b.id) as books, SUM(b.total_copies) as copies
@@ -626,18 +657,10 @@ class LibraryApp:
         cursor.close()
 
         columns = ["Страна", "Книг", "Экземпляров"]
-        self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=200)
-
-        for row in rows:
-            self.tree.insert("", tk.END, values=row)
-
-        self.status_var.set(f"Отчёт: книги по странам")
+        self.set_table_data(columns, rows)
+        self.status_var.set("Отчёт: книги по странам")
 
     def report_genre_popularity(self):
-        self.clear_table()
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT g.name, COUNT(b.id) as books, COUNT(l.id) as loans,
@@ -651,15 +674,8 @@ class LibraryApp:
         cursor.close()
 
         columns = ["Жанр", "Книг", "Выдач", "Популярность"]
-        self.tree["columns"] = columns
-        for col in columns:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, width=120)
-
-        for row in rows:
-            self.tree.insert("", tk.END, values=row)
-
-        self.status_var.set(f"Отчёт: популярность по жанрам")
+        self.set_table_data(columns, rows)
+        self.status_var.set("Отчёт: популярность по жанрам")
 
     def show_about(self):
         messagebox.showinfo("О программе",
@@ -670,7 +686,6 @@ class LibraryApp:
                             "- PostgreSQL\n"
                             "- Python + Tkinter\n"
                             "- psycopg2")
-
 
 if __name__ == "__main__":
     root = tk.Tk()
